@@ -561,6 +561,83 @@ docker-compose.yml         single container, pulls the ghcr image by default, sq
 
 With Docker's default bridge network, upstream may return empty content (Google rejects certain NAT ranges). We have **never reproduced it here**. If you hit it, try `network_mode: host` to confirm whether that is the cause.
 
+## FAQ
+
+### How is this different from the official Gemini API? Do I need an API key?
+
+No API key. This project does not wrap `generativelanguage.googleapis.com`; it reverse-proxies the protocol of the
+gemini.google.com web app itself, so there is no key and no paid quota. The trade-off is that capabilities follow the
+web app: what the web app can do (web search, image, music, canvas, video generation) works here; what it can't
+(deep research) doesn't. Anonymous use — no cookie at all — already gives you the text models.
+
+### How does this relate to Sophomoresty/gemini-web2api (Python) and other Go projects named gemini-web2api?
+
+This is an independent Go implementation. Its early protocol work was informed by the Python project (see Links);
+it is **not a port**, and other Go repositories with a similar name are unrelated. What this one brings: a single
+static binary, a real Chrome TLS fingerprint via utls, a proxy pool plus a cookie pool (automatic renewal, each
+account pinned to one exit), a built-in admin dashboard, SQLite / MySQL / PostgreSQL, the async `/v1/videos`
+endpoint, and an MCP `web_search` tool.
+
+### Why does my cookie die after about 30 minutes? How do I keep it alive?
+
+The ticket that expires is `__Secure-1PSIDTS` (roughly 30 minutes). The proxy re-mints it on a timer with a sentinel
+payload and runs a keepalive, so **a cookie exported from Firefox stays alive indefinitely**. Recent Chrome enables
+Device Bound Session Credentials: a session exported from Chrome returns 401 on rotation and dies within 30 minutes
+to a few hours. Export from Firefox instead — no browser extension or always-on machine needed.
+
+### Will my account get banned? Is the limit per account or per IP?
+
+Per **exit IP + TLS fingerprint**, not per account. Measured: a burst of roughly 80–180 requests from one exit
+triggers the sorry-page redirect, which clears itself after about two hours; a steady pace (e.g. 10 requests per
+minute) ran 800 requests without a block. A paid plan (Google AI Pro) does **not** raise this ceiling. To scale,
+spread requests across exits with the proxy pool rather than adding accounts.
+
+### What do I get with a free account versus Pro / paid?
+
+Anonymous (no cookie): `gemini-3.6-flash` and `gemini-3.5-flash-lite`, web search included.
+A free account's cookie additionally unlocks `gemini-3.1-pro`, the `-thinking` variants of all three models,
+image / video input, image generation, music and canvas.
+Paid accounts only: `gemini-3.8-flash` (free accounts are downgraded to 3.5 Flash-Lite) and video generation
+(`gemini-video` / `/v1/videos`).
+
+### Why does every message create a new conversation on gemini.google.com?
+
+Each request is its own conversation by default. Enable **server-side multi-turn** (`multi_turn`) on the panel's
+Settings page and consecutive messages of one conversation reuse the same web session, sending only the newest
+turn while history stays server-side. To stop conversations piling up in the web app, also enable
+**auto-delete web conversation** (`auto_delete_conversation`), which removes the conversation once the reply is done.
+
+### Can I use it as the backend for Cursor / Dify / WorkBuddy-style agents?
+
+You can connect them (it is OpenAI-compatible), and plain chat and coding work fine. But the web app caps a single
+request at roughly **130,000 bytes** (about 160,000 with a cookie); agent tools that push tens of kilobytes of system
+prompt and history per request will get off-topic answers and look "dumb" — a limit of the web model itself, not of
+the proxy. Function calling is prompt-level, so the model does not always answer in the expected format.
+
+### Is gemini-3.8-flash available?
+
+Yes: `gemini-3.8-flash` and `gemini-3.8-flash-thinking`, for paid Gemini accounts; requests from free accounts are
+downgraded server-side to 3.5 Flash-Lite. `gemini-3.7-flash` remains as an alias so older clients keep working.
+
+### Which model does image generation use? Can it output 2K?
+
+`gemini-image` uses the web app's image-generation tool slot rather than a pinned model: whatever backend the web
+app currently uses (e.g. Nano Banana 2) is what you get, automatically. Resolution is capped by the web app at
+roughly one megapixel; there is no 2K.
+
+### Why does streaming turn into a single response behind Dify / a reverse proxy?
+
+Plain chat streams for real (every upstream frame is forwarded as it arrives); requests carrying `tools`, and
+`/v1/responses`, are buffered and sent whole. Responses already carry `X-Accel-Buffering: no`; if output still
+arrives in one piece behind Nginx or similar, check the reverse proxy's own buffering — connected directly, the
+proxy streams chunk by chunk.
+
+### Does it support MySQL / PostgreSQL?
+
+Yes. Set `SQL_DSN` (`mysql://user:pass@host:3306/db` or `postgres://user:pass@host:5432/db?sslmode=disable`);
+unset means SQLite. Tables are created automatically and all three share one schema. SQLite is the easy choice for a
+single instance; MySQL / PostgreSQL only matter when several instances share one pool.
+
 ## Acknowledgments
 
 - [bogdanfinn/tls-client](https://github.com/bogdanfinn/tls-client) — real Chrome TLS fingerprints
