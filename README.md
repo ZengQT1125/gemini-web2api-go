@@ -631,6 +631,69 @@ docker-compose.yml         单容器，默认拉 ghcr 镜像，sqlite 挂 volume
 
 Docker 用默认 bridge 网络时上游可能返回空内容（Google 拒绝某些 NAT 段）。本项目**没有复现过**，真遇到可以试 `network_mode: host` 验证是不是这个原因。
 
+## 常见问题（FAQ）
+
+### 这和 Google 官方 Gemini API 有什么区别？需要 API Key 吗？
+
+不需要。本项目不封装 `generativelanguage.googleapis.com`，而是直接反代 gemini.google.com 网页端的协议，
+所以没有 API Key、没有付费配额这回事。代价是能力边界跟着网页端走：网页端有的（联网搜索、生图、音乐、画布、生视频）
+这里能用，网页端没有的（深度研究）这里也没有。匿名（不挂 cookie）就能跑文本模型。
+
+### 和 Sophomoresty/gemini-web2api（Python）、其它叫 gemini-web2api 的 Go 项目是什么关系？
+
+本仓是独立的 Go 实现，早期摸网页协议时参考过 Python 版的思路（见文末友情链接），**不是移植版**；
+其它同名的 Go 项目与本仓无关。本仓自己的特点：单二进制、utls 模拟 Chrome 真 TLS 指纹、代理池 + Cookie 池（自动续期、
+账号粘住出口）、带管理面板、SQLite / MySQL / PostgreSQL、`/v1/videos` 异步视频接口、MCP `web_search` 工具。
+
+### Cookie 为什么大约半小时就失效？怎么长期用？
+
+失效的那张票是 `__Secure-1PSIDTS`（约 30 分钟过期）。本项目会定时用哨兵 payload 换发它并做保活，
+**用 Firefox 登录导出的 cookie 可以一直续**。Chrome 新版本启用了设备绑定会话（DBSC），导出的 cookie 换发时会 401，
+所以从 Chrome 导出的号半小时到几小时就死——换 Firefox 导出即可，不需要浏览器插件或挂机机器。
+
+### 会被封号吗？封禁是按账号还是按 IP？
+
+按**出口 IP + TLS 指纹**，不按账号。实测同一出口突发打 80～180 次会被重定向到 sorry 页，约两小时后自动恢复；
+平缓地打（例如每分钟 10 次）连打 800 次没被拦。付费（Google AI Pro）**不会**提高这个阈值。
+要放大产能靠代理池把请求分散到多个出口，而不是换账号。
+
+### 免费账号和 Pro / 付费账号差在哪？
+
+匿名（不挂 cookie）：`gemini-3.6-flash`、`gemini-3.5-flash-lite`，含联网搜索。
+挂免费账号 cookie：额外解锁 `gemini-3.1-pro`、三个模型的思考版（`-thinking`）、读图 / 读视频、生图、音乐、画布。
+付费账号才有：`gemini-3.8-flash`（免费号会被降级成 3.5 Flash-Lite）和生视频（`gemini-video` / `/v1/videos`）。
+
+### 为什么每发一条消息，gemini.google.com 里就多出一个会话？
+
+默认每个请求是独立会话。在面板「设置」勾选**服务端多轮续接**（`multi_turn`）后，同一串连续对话会复用同一个网页会话，
+只发最新一句、历史留在服务端。不想让网页端堆会话，再勾**自动删网页会话**（`auto_delete_conversation`），出完结果自动删掉。
+
+### 能当 Cursor / Dify / WorkBuddy 这类 agent 工具的后端吗？
+
+能接（OpenAI 兼容），纯聊天和写代码没问题；但网页端**单次请求约 13 万字节封顶**（挂 cookie 约 16 万），
+agent 工具一次塞几万字系统提示和历史时容易答非所问、看起来变笨——这是网页端模型的先天限制，不是接入方式的问题。
+Function calling 是 prompt 级实现，模型不一定每次都按格式返回。
+
+### 有 gemini-3.8-flash 吗？
+
+有（`gemini-3.8-flash` 与 `gemini-3.8-flash-thinking`），需要付费 Gemini 账号；免费号请求它会被服务端降级成 3.5 Flash-Lite。
+`gemini-3.7-flash` 作为别名保留，老客户端不受影响。
+
+### 生图用的是哪个模型？能出 2K 吗？
+
+`gemini-image` 走的是网页端的生图工具位，不锁模型：网页端当前用什么生图后端（如 Nano Banana 2），这里就自动跟着。
+分辨率被网页端锁在约 100 万像素，没有 2K。
+
+### 为什么在 Dify / 反向代理后面流式变成了一次性输出？
+
+普通对话是真流式（上游每出一帧就转发）；带 `tools` 的请求和 `/v1/responses` 是收完再发。
+响应已带 `X-Accel-Buffering: no`，如果经过 Nginx 等反代仍被缓冲，检查反代自己的缓冲设置；本项目直连时是逐段输出的。
+
+### 支持 MySQL / PostgreSQL 吗？
+
+支持。设环境变量 `SQL_DSN`（`mysql://user:pass@host:3306/db` 或 `postgres://user:pass@host:5432/db?sslmode=disable`），
+不设默认 SQLite；建表自动完成，三种库共用一套 schema。单机用 SQLite 最省事，多实例共享一个池子才需要 MySQL / PG。
+
 ## 致谢
 
 - [bogdanfinn/tls-client](https://github.com/bogdanfinn/tls-client) — Chrome 真指纹 TLS 库
